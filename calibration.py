@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 # From RC (example coordinates in cm)
-robot_pts = np.float32([ [-10, 20], [10, 20], [-10, 30] ]) # BL, BR, TL
+robot_pts = np.float32([ [0.0, 0.25], [0.42, 0.25], [0.0, 0.0] ]) # BL, BR, TL
 
 # From Calibration Session (converted to pixel coordinates)
 frame_width, frame_height = 1920, 1080 # Example resolution
