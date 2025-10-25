@@ -39,26 +39,25 @@ try:
     # Get names of all links defined in URDF
     all_link_names = [link.name for link in my_chain.links]
     print("All links found:", all_link_names)
-    
-    # Define the names of the joints/links you actually want to control with IK
-    # These typically correspond to the revolute joints listed in your URDF's <joint> tags
-    # Example: ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll']
-    # Adjust this list based on the URDF file structure and your needs
-    active_link_names = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll'] # Example for 5 DOF arm pose
-    
-    # Create the active_links_mask based on the names
-    active_links_mask = [link.name in active_link_names for link in my_chain.links]
-    
-    # Recreate the chain with the specific mask if you want fine control
-    # Or, rely on ikpy's default behavior and adjust slicing later.
-    # For simplicity, let's stick to slicing for now, assuming the default includes the base + active joints + gripper.
 
-    # Expected number of controllable joints based on URDF (excluding fixed)
-    # This count should match the number of non-fixed joints ikpy will try to solve for.
-    num_active_joints = sum(1 for link in my_chain.links if link.joint_type != 'fixed') 
-    # Usually, we care about the arm pose joints (e.g., 5 for SO101's arm)
-    num_pose_joints = len(active_link_names) # Should be 5 based on URDF parsing
-    print(f"Total non-fixed joints found by ikpy (incl. gripper): {num_active_joints}")
+    # Derive non-fixed (actuated) joint/link names from the chain
+    non_fixed_joint_names = [link.name for link in my_chain.links if link.joint_type != 'fixed']
+
+    # Define the pose joints we want IK to control (exclude gripper/other non-pose DOFs)
+    # Keep order stable for downstream mapping and publishing
+    pose_joint_names = [
+        name for name in ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll']
+        if name in non_fixed_joint_names
+    ]
+
+    # Create the active_links_mask based on pose joints (True only for pose joints)
+    active_links_mask = [link.name in pose_joint_names for link in my_chain.links]
+
+    # Counts for logging/validation
+    num_non_fixed_joints = len(non_fixed_joint_names)
+    num_pose_joints = len(pose_joint_names)
+    print(f"Total non-fixed joints found by ikpy (incl. gripper): {num_non_fixed_joints}")
+    print(f"Active pose joints (masked): {pose_joint_names}")
     print(f"Expecting {num_pose_joints} active pose joint angles.")
 
 except FileNotFoundError:
@@ -91,15 +90,24 @@ def calculate_inverse_kinematics(target_x_m, target_y_m, target_z_m):
 
     try:
         # --- Calculate Inverse Kinematics ---
-        calculated_joint_angles_rad = my_chain.inverse_kinematics(
-            target_position=target_position,
-            initial_position=initial_joint_angles_rad,
-            # You might need to add target_orientation and orientation_mode here
-            # depending on whether you need to control the pen's angle precisely.
-            # Example for pointing down (requires experimentation):
-            # target_orientation=[0, -1, 0], # Pointing Y-down in the tool frame
-            # orientation_mode="Z" # Match the Z-axis orientation
-        )
+        # Prefer a stable orientation so the tool doesn't flip while tracing.
+        # Constrain the end-effector Z axis; fallback to unconstrained if IK fails.
+        target_orientation_vec = [0.0, 0.0, -1.0]  # Assumes tool Z should point "down"; adjust if needed
+        try:
+            calculated_joint_angles_rad = my_chain.inverse_kinematics(
+                target_position=target_position,
+                initial_position=initial_joint_angles_rad,
+                target_orientation=target_orientation_vec,
+                orientation_mode="Z",
+                active_links_mask=active_links_mask
+            )
+        except Exception as e_orient:
+            # Fallback: run without orientation constraint but still respect active mask
+            calculated_joint_angles_rad = my_chain.inverse_kinematics(
+                target_position=target_position,
+                initial_position=initial_joint_angles_rad,
+                active_links_mask=active_links_mask
+            )
 
         # Convert radians to degrees
         calculated_joint_angles_deg = np.degrees(calculated_joint_angles_rad)
@@ -111,21 +119,19 @@ def calculate_inverse_kinematics(target_x_m, target_y_m, target_z_m):
         position_error = np.linalg.norm(np.array(fk_position) - np.array(target_position))
         #print(f"  IK Target(m): {target_position}, FK Result(m): [{fk_position[0]:.4f}, {fk_position[1]:.4f}, {fk_position[2]:.4f}], Pos Error: {position_error * 100:.3f} cm")
 
-        # --- FIX FOR ANGLE SLICING ---
-        # Based on URDF and previous output, ikpy likely returns angles for:
-        # [dummy_base, shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper, ...] 
-        # We want the 5 angles from shoulder_pan to wrist_roll.
-        # This corresponds to indices 1 through 5 (inclusive) in the full list.
-        if len(calculated_joint_angles_deg) >= (num_pose_joints + 1): # Check if we have enough angles
-             active_pose_joint_angles_deg = calculated_joint_angles_deg[1 : num_pose_joints + 1] # Slice indices 1, 2, 3, 4, 5
-        else:
-             print(f"Error: IK returned only {len(calculated_joint_angles_deg)} angles, expected at least {num_pose_joints + 1}.")
-             return None
-             
-        # Optional: Further check if the number matches exactly what you need
+        # --- ROBUST JOINT MAPPING BY NAME ---
+        # Map returned angles to link names, then pick only pose joints in the desired order
+        angles_by_name_deg = {}
+        for idx, link in enumerate(my_chain.links):
+            # IKPy returns one angle per link; for fixed links this is typically 0
+            if hasattr(link, 'joint_type') and link.joint_type != 'fixed':
+                angles_by_name_deg[link.name] = calculated_joint_angles_deg[idx]
+
+        active_pose_joint_angles_deg = [angles_by_name_deg[name] for name in pose_joint_names if name in angles_by_name_deg]
+
         if len(active_pose_joint_angles_deg) != num_pose_joints:
-             print(f"Warning: Sliced angles count ({len(active_pose_joint_angles_deg)}) doesn't match expected pose joints ({num_pose_joints}). Full output (deg): {calculated_joint_angles_deg}")
-             # Depending on robustness needed, you might return None here too.
+            print(f"Warning: Could not map all pose joints. Expected {num_pose_joints}, got {len(active_pose_joint_angles_deg)}. Mapped: {list(angles_by_name_deg.keys())}")
+            return None
 
         return active_pose_joint_angles_deg
 
@@ -152,10 +158,11 @@ def move_to_point(target_x_m, target_y_m, target_z_m):
     if joint_angles_deg is not None:
         # Ensure we have the correct number of angles before proceeding
         if len(joint_angles_deg) == num_pose_joints:
-            #print(f"  IK Solution Found. Sending joint angles (degrees):")
-            active_links_names_for_print = [link.name for link in my_chain.links if link.joint_type != 'fixed'][0:num_pose_joints] # Get the names corresponding to the angles
-            for name, angle in zip(active_links_names_for_print, joint_angles_deg):
-                #print(f"    {name}: {angle:.4f}")
+            # Stable mapping: publish using pose_joint_names order
+            for name, angle in zip(pose_joint_names, joint_angles_deg):
+                if name not in JOINT_LIMITS:
+                    print(f"  Warning: JOINT_LIMITS missing for {name}. Skipping publish for this joint.")
+                    continue
 
                 # Normalize angle to [-100, 100]
                 min_angle, max_angle = JOINT_LIMITS[name]
@@ -165,8 +172,7 @@ def move_to_point(target_x_m, target_y_m, target_z_m):
                 topic = f"{MQTT_BASE_TOPIC}/post/{name}"
                 mqtt_client.publish(topic, normalized)
                 #print(f"    Published: {topic} = {normalized:.2f}")
-                 
-            
+
             print("  ✅ All joint angles published to MQTT.") 
         else:
             print(f"  Error: IK calculation returned an unexpected number of angles ({len(joint_angles_deg)}). Cannot move robot.")
