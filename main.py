@@ -4,10 +4,20 @@ import numpy as np
 import robot_driver  # Your robot control functions
 from hand_tracker import HandTracker
 from calibration import load_transform, transform_cam_to_robot
+import paho.mqtt.client as mqtt
+
+# --- MQTT CONFIG ---
+MQTT_BROKER = "10.148.40.253"  
+MQTT_PORT = 1883
+MQTT_BASE_TOPIC = "robot"
+
+# --- Connect MQTT ---
+mqtt_client = mqtt.Client()
+mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
 # --- Constants ---
-Z_DRAW_AIR = 0.03 # Your chosen air-drawing height
-# Get frame dimensions from your hand tracker setup
+Z_DRAW_AIR = 0.03 
+
 FRAME_WIDTH, FRAME_HEIGHT = 1920, 1080
 
 # Load the transformation matrix calculated by calibration.py
@@ -29,6 +39,8 @@ if not tracker.start_camera():
     exit()
 
 try:
+    r_x_list = []
+    r_y_list = []
     while True:
         # Get hand position and visualization
         cam_x_norm, cam_y_norm, is_pinching, image = tracker.get_hand_position()
@@ -43,27 +55,34 @@ try:
                 FRAME_HEIGHT
             )
 
-            # Command the Robot
-            #robot_driver.move_to_point(robot_x, robot_y, Z_DRAW_AIR)
-            #print(f"Moving to Robot Coords: X={robot_x:.3f} m, Y={robot_y:.3f} m, Z={Z_DRAW_AIR:.3f} m")
-# --- TEST SECTION ---
-            # Print the target coordinates
-            print(f"PINCH -> Target Robot Coords: X={robot_x:.4f} m, Y={robot_y:.4f} m, Z={Z_DRAW_AIR:.4f} m")
+            r_x_list.append(robot_x)
+            r_y_list.append(robot_y)
 
-            # 2. Calculate Joint Angles using IK function
+            if len(r_x_list) == 5:
+                robot_x = np.mean(r_x_list)
+                robot_y = np.mean(r_y_list)
+                r_x_list = []
+                r_y_list = []
+            else:
+                continue
+
+
+            # Print the target coordinates
+            #print(f"PINCH -> Target Robot Coords: X={robot_x:.4f} m, Y={robot_y:.4f} m, Z={Z_DRAW_AIR:.4f} m")
+            # Publish robot_x and robot_y to MQTT
+            mqtt_client.publish(f"robot/pre/x", float(robot_x))
+            mqtt_client.publish(f"robot/pre/y", float(robot_y))
+            #print(f"Published to MQTT: {MQTT_BASE_TOPIC}/x = {robot_x:.4f}, {MQTT_BASE_TOPIC}/y = {robot_y:.4f}")
+
+            print("robot_x", robot_x)
+            print("robot_y", robot_y)
+            print("cam_x", cam_x_norm)
+            print("cam_y", cam_y_norm)
+
             joint_angles = robot_driver.calculate_inverse_kinematics(robot_x, robot_y, Z_DRAW_AIR)
 
-            if joint_angles is not None:
-                # Format angles for printing
-                angle_str = ", ".join([f"{angle:.2f}" for angle in joint_angles])
-                print(f"       -> Calculated Angles (deg): [{angle_str}]")
-            else:
-                print("       -> IK solution not found for this point (likely unreachable).")
-
-
-            # !!! KEEP ACTUAL ROBOT MOVEMENT COMMENTED OUT !!!
-            # robot_driver.move_to_point(robot_x_m, robot_y_m, Z_DRAW_AIR)
-            # --- END TEST SECTION ---
+            robot_driver.move_to_point(robot_x, robot_y, Z_DRAW_AIR)
+            
 
         # Display camera feed
         if image is not None:

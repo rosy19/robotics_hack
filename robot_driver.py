@@ -1,6 +1,27 @@
 import ikpy.chain
 import numpy as np
 
+import paho.mqtt.client as mqtt
+
+# Define joint limits in degrees for normalization
+JOINT_LIMITS = {
+    'shoulder_pan':   (-100, 100),   # example values, replace with your real limits
+    'shoulder_lift':  (-100, 100),
+    'elbow_flex':     (-100, 100),
+    'wrist_flex':     (-100, 100),
+    'wrist_roll':     (-100, 100)
+}
+
+# --- MQTT CONFIG ---
+MQTT_BROKER = "10.148.40.253"   # ← Replace with your Raspberry Pi IP (or 'localhost' if broker runs here)
+MQTT_PORT = 1883
+MQTT_BASE_TOPIC = "robot"
+
+# --- Connect MQTT ---
+mqtt_client = mqtt.Client()
+mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+
 # --- Define Your Robot's Kinematic Chain ---
 # Load the robot structure directly from the URDF file.
 # Make sure the URDF file path is correct.
@@ -88,7 +109,7 @@ def calculate_inverse_kinematics(target_x_m, target_y_m, target_z_m):
         fk_matrix = my_chain.forward_kinematics(calculated_joint_angles_rad) 
         fk_position = fk_matrix[:3, 3] # Extract X, Y, Z position
         position_error = np.linalg.norm(np.array(fk_position) - np.array(target_position))
-        print(f"  IK Target(m): {target_position}, FK Result(m): [{fk_position[0]:.4f}, {fk_position[1]:.4f}, {fk_position[2]:.4f}], Pos Error: {position_error * 100:.3f} cm")
+        #print(f"  IK Target(m): {target_position}, FK Result(m): [{fk_position[0]:.4f}, {fk_position[1]:.4f}, {fk_position[2]:.4f}], Pos Error: {position_error * 100:.3f} cm")
 
         # --- FIX FOR ANGLE SLICING ---
         # Based on URDF and previous output, ikpy likely returns angles for:
@@ -122,7 +143,7 @@ def move_to_point(target_x_m, target_y_m, target_z_m):
         target_y_m (float): Target Y coordinate in METERS.
         target_z_m (float): Target Z coordinate in METERS.
     """
-    print(f"Attempting to move to target (m): [{target_x_m:.4f}, {target_y_m:.4f}, {target_z_m:.4f}]")
+    #print(f"Attempting to move to target (m): [{target_x_m:.4f}, {target_y_m:.4f}, {target_z_m:.4f}]")
     
     # --- FIX FOR UNITS ---
     # Ensure coordinates passed to calculate_inverse_kinematics are in METERS.
@@ -131,18 +152,22 @@ def move_to_point(target_x_m, target_y_m, target_z_m):
     if joint_angles_deg is not None:
         # Ensure we have the correct number of angles before proceeding
         if len(joint_angles_deg) == num_pose_joints:
-            print(f"  IK Solution Found. Sending joint angles (degrees):")
+            #print(f"  IK Solution Found. Sending joint angles (degrees):")
             active_links_names_for_print = [link.name for link in my_chain.links if link.joint_type != 'fixed'][0:num_pose_joints] # Get the names corresponding to the angles
             for name, angle in zip(active_links_names_for_print, joint_angles_deg):
-                 print(f"    {name}: {angle:.4f}")
+                #print(f"    {name}: {angle:.4f}")
+
+                # Normalize angle to [-100, 100]
+                min_angle, max_angle = JOINT_LIMITS[name]
+                normalized = 200 * (angle - min_angle) / (max_angle - min_angle) - 100
+                normalized = max(-100, min(100, normalized))  # Clamp to [-100, 100]
+
+                topic = f"{MQTT_BASE_TOPIC}/post/{name}"
+                mqtt_client.publish(topic, normalized)
+                #print(f"    Published: {topic} = {normalized:.2f}")
                  
-            # ================================================================
-            # TODO: Add your code here to send the `joint_angles_deg` array 
-            #       to your actual robot hardware interface/controller script.
-            # Example (pseudo-code):
-            # robot_hardware_interface.set_joint_positions(joint_angles_deg) 
-            # ================================================================
-            print("  (Placeholder: Sent angles to robot hardware)") 
+            
+            print("  ✅ All joint angles published to MQTT.") 
         else:
             print(f"  Error: IK calculation returned an unexpected number of angles ({len(joint_angles_deg)}). Cannot move robot.")
             

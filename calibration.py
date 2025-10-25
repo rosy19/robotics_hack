@@ -2,13 +2,13 @@ import cv2
 import numpy as np
 
 # From RC (example coordinates in cm)
-robot_pts = np.float32([ [0.0, 0.25], [0.42, 0.25], [0.0, 0.0] ]) # BL, BR, TL
+robot_pts = np.float32([ [-0.22, 0.05], [0.22, 0.05], [-0.22, 0.25] ]) # BL, BR, TL
 
 # From Calibration Session (converted to pixel coordinates)
 frame_width, frame_height = 1920, 1080 # Example resolution
-cam_norm_bl = (0.1, 0.9)
-cam_norm_br = (0.8, 0.9)
-cam_norm_tl = (0.1, 0.2)
+cam_norm_bl = (0.0, 1.0)
+cam_norm_br = (1.0, 1.0)
+cam_norm_tl = (0.0, 0.0)
 camera_pts = np.float32([
     [cam_norm_bl[0] * frame_width, cam_norm_bl[1] * frame_height],
     [cam_norm_br[0] * frame_width, cam_norm_br[1] * frame_height],
