@@ -1,13 +1,13 @@
 # main.py
 import cv2
 import numpy as np
-import robot_driver  # Your robot control functions
+#import robot_driver  # Your robot control functions
 from hand_tracker import HandTracker
 from calibration import load_transform, transform_cam_to_robot
 import paho.mqtt.client as mqtt
 
 # --- MQTT CONFIG ---
-MQTT_BROKER = "10.148.40.253"  
+MQTT_BROKER = "10.216.64.253"  
 MQTT_PORT = 1883
 MQTT_BASE_TOPIC = "robot"
 
@@ -79,9 +79,9 @@ try:
             print("cam_x", cam_x_norm)
             print("cam_y", cam_y_norm)
 
-            joint_angles = robot_driver.calculate_inverse_kinematics(robot_x, robot_y, Z_DRAW_AIR)
+            # joint_angles = robot_driver.calculate_inverse_kinematics(robot_x, robot_y, Z_DRAW_AIR)
 
-            robot_driver.move_to_point(robot_x, robot_y, Z_DRAW_AIR)
+            # robot_driver.move_to_point(robot_x, robot_y, Z_DRAW_AIR)
             
 
         # Display camera feed
@@ -91,8 +91,6 @@ try:
                 display_text = "Hand Detected"
                 if is_pinching:
                      display_text = f"PINCHING -> Target: X={robot_x:.2f} Y={robot_y:.2f}"
-                     if joint_angles is None:
-                         display_text += " (UNREACHABLE)"
 
             cv2.putText(image, display_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.imshow("Robot Hand Control - ANGLE TEST MODE", image)
@@ -104,4 +102,3 @@ finally:
     # --- Cleanup ---
     tracker.stop()
     cv2.destroyAllWindows()
-    robot_driver.go_home()
